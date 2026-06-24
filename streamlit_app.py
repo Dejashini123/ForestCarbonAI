@@ -6,6 +6,8 @@ import plotly.graph_objects as go
 import plotly.express as px
 import joblib
 from sklearn.preprocessing import StandardScaler
+from PIL import Image
+from datetime import datetime
 
 # Set page config
 st.set_page_config(page_title="🌳 Carbon Stock Predictor", layout="wide")
@@ -52,8 +54,7 @@ def categorize_carbon(carbon):
 # Sidebar Navigation
 st.sidebar.title("📊 Navigation")
 page = st.sidebar.radio("Choose a page:", 
-    ["🏠 Home", "🎯 Predict Carbon", "🗺️ Carbon Maps", "📈 Feature Importance", "📊 Model Info"])
-
+    ["🏠 Home", "🎯 Predict Carbon", "📡 Satellite Upload", "🗺️ Carbon Maps", "📈 Feature Importance", "📊 Model Info"])
 # PAGE 1: HOME
 if page == "🏠 Home":
     st.header("Welcome to Carbon Stock Predictor 🌍")
@@ -118,6 +119,14 @@ elif page == "🎯 Predict Carbon":
     
     st.markdown("Enter satellite spectral values to predict carbon stock")
     
+    # Add carbon credit options
+    st.subheader("💰 Carbon Credit Settings")
+    col_credit1, col_credit2 = st.columns(2)
+    with col_credit1:
+        price_per_tonne = st.slider("Carbon Price ($/tonne)", 5, 50, 15)
+    with col_credit2:
+        area_hectares = st.number_input("Forest Area (hectares)", 1, 10000, 100)
+    
     col1, col2 = st.columns(2)
     
     with col1:
@@ -151,11 +160,148 @@ elif page == "🎯 Predict Carbon":
         with col2:
             st.metric("Category", category)
         with col3:
-            carbon_credits = prediction * 15  # $15 per tonne
-            st.metric("Potential Value", f"${carbon_credits:.2f}", "at $15/tonne")
+            carbon_credits = prediction * price_per_tonne
+            st.metric("Value/hectare", f"${carbon_credits:.2f}", f"at ${price_per_tonne}/tonne")
         
         st.success(f"✅ Predicted carbon: **{prediction:.2f} tonnes/hectare**")
-
+        
+        st.divider()
+        
+        # Carbon Credits Analysis
+        st.subheader("💰 Carbon Credits Analysis")
+        
+        total_carbon = prediction * area_hectares
+        total_value = total_carbon * price_per_tonne
+        
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("Total Carbon", f"{total_carbon:.0f}", "tonnes")
+        with col2:
+            st.metric("Carbon Credits (VCS)", f"{total_carbon:.0f}", "credits")
+        with col3:
+            st.metric("Total Value", f"${total_value:,.0f}", f"@ ${price_per_tonne}/tonne")
+        with col4:
+            annual_value = total_value / 40  # Amortized over 40 years
+            st.metric("Annual Value", f"${annual_value:,.0f}", "per year")
+        
+        st.divider()
+        
+        # Market info
+        st.markdown("""
+        ### 📊 Carbon Credit Market Info:
+        - **VCS Credits:** $10-20/tonne (most common)
+        - **Gold Standard:** $15-30/tonne
+        - **CAR Credits:** $12-25/tonne
+        - **Typical Forest Project:** 200-800 t CO2/hectare lifetime
+        """)
+ # PAGE 2B: SATELLITE UPLOAD
+elif page == "📡 Satellite Upload":
+    st.header("📡 Upload Satellite Image")
+    st.markdown("Upload a real Sentinel-2 satellite image to predict carbon!")
+    
+    from satellite_processor import extract_bands_from_image, calculate_indices_from_bands
+    
+    uploaded_file = st.file_uploader(
+        "📤 Upload satellite image (TIFF, PNG, or JPG)",
+        type=['tiff', 'tif', 'png', 'jpg', 'jpeg']
+    )
+    
+    if uploaded_file is not None:
+        st.success(f"✅ File uploaded: {uploaded_file.name}")
+        
+        # Display image
+        image = Image.open(uploaded_file)
+        st.image(image, caption="Uploaded Satellite Image", use_column_width=True)
+        
+        # Process image
+        st.subheader("🔄 Processing Satellite Data...")
+        
+        with st.spinner("Extracting satellite bands..."):
+            bands = extract_bands_from_image(uploaded_file)
+        
+        if bands is not None:
+            st.success("✅ Bands extracted successfully!")
+            
+            # Calculate indices
+            with st.spinner("Calculating vegetation indices..."):
+                indices = calculate_indices_from_bands(bands)
+            
+            if indices is not None:
+                st.success("✅ Indices calculated!")
+                
+                # Display extracted data
+                st.subheader("📊 Extracted Satellite Data")
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.metric("NDVI", f"{indices['NDVI']:.3f}", "Vegetation Index")
+                    st.metric("EVI", f"{indices['EVI']:.3f}", "Enhanced Vegetation")
+                    st.metric("SAVI", f"{indices['SAVI']:.3f}", "Soil-Adjusted Veg")
+                
+                with col2:
+                    st.metric("NBR", f"{indices['NBR']:.3f}", "Burn Ratio")
+                    st.metric("Biomass", f"{indices['Biomass']:.1f}", "Mg/hectare")
+                    st.metric("B11 (SWIR)", f"{indices['B11']:.1f}", "Reflectance")
+                
+                # Make prediction
+                st.subheader("🎯 Carbon Prediction from Satellite Data")
+                
+                features = np.array([
+                    indices['NDVI'],
+                    indices['EVI'],
+                    indices['SAVI'],
+                    indices['NBR'],
+                    indices['B2'],
+                    indices['B3'],
+                    indices['B4'],
+                    indices['B8'],
+                    indices['B11'],
+                    indices['B12'],
+                    indices['Biomass']
+                ])
+                
+                prediction = predict_carbon(features, scaler)
+                category, color = categorize_carbon(prediction)
+                
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Predicted Carbon", f"{prediction:.2f}", "tonnes/ha")
+                with col2:
+                    st.metric("Forest Type", category)
+                with col3:
+                    st.metric("Carbon Value", f"${prediction * 15:.2f}", "at $15/tonne")
+                
+                st.success(f"✅ Carbon stock: **{prediction:.2f} tonnes/hectare**")
+                
+                # Save results
+                st.divider()
+                st.subheader("💾 Download Results")
+                
+                results_df = pd.DataFrame({
+                    'Feature': ['NDVI', 'EVI', 'SAVI', 'NBR', 'B2', 'B3', 'B4', 'B8', 'B11', 'B12', 'Biomass', 'Predicted Carbon'],
+                    'Value': [indices['NDVI'], indices['EVI'], indices['SAVI'], indices['NBR'], 
+                             indices['B2'], indices['B3'], indices['B4'], indices['B8'], 
+                             indices['B11'], indices['B12'], indices['Biomass'], prediction]
+                })
+                
+                csv_data = results_df.to_csv(index=False)
+                st.download_button(
+                    label="📥 Download Results as CSV",
+                    data=csv_data,
+                    file_name=f"satellite_analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                    mime="text/csv",
+                    use_container_width=True
+                )
+    else:
+        st.info("👆 Upload an image to get started!")
+        st.markdown("""
+        ### 📡 How it works:
+        1. Upload a satellite image (Sentinel-2, Landsat, or aerial photo)
+        2. We extract 11 spectral bands
+        3. Calculate vegetation indices (NDVI, EVI, SAVI, NBR)
+        4. Predict carbon stock using AI
+        5. Download results!
+        """)       
 # PAGE 3: CARBON MAPS
 elif page == "🗺️ Carbon Maps":
     st.header("🗺️ Forest Carbon Stock Maps")
